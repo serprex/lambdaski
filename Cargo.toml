@@ -1,0 +1,7 @@
+[package]
+name = "lambdaski"
+version = "0.0.1"
+authors = ["serprex"]
+repository = "https://github.com/serprex/lambdaski"
+description = "Type level SKI combinators"
+license = "MIT"
