@@ -22,27 +22,27 @@ impl<T: F> F for K1<T> {}
 impl F for I {}
 
 pub trait A<In: F> {
-	type Out: F;
+	type O: F;
 }
 impl<T: F> A<T> for S {
-	type Out = S1<T>;
+	type O = S1<T>;
 }
 impl<X: F, T: F> A<T> for S1<X> {
-	type Out = S2<X, T>;
+	type O = S2<X, T>;
 }
 impl<X: F, Y: F, T: F> A<T> for S2<X, Y>
-	where X: A<T>, Y: A<T>, <X as A<T>>::Out: A<<Y as A<T>>::Out>
+	where X: A<T>, Y: A<T>, <X as A<T>>::O: A<<Y as A<T>>::O>
 {
-	type Out = <<X as A<T>>::Out as A<<Y as A<T>>::Out>>::Out;
+	type O = <<X as A<T>>::O as A<<Y as A<T>>::O>>::O;
 }
 
 impl<T: F> A<T> for K {
-	type Out = K1<T>;
+	type O = K1<T>;
 }
 impl<X: F, T: F> A<T> for K1<X> {
-	type Out = X;
+	type O = X;
 }
 
 impl<T: F> A<T> for I {
-	type Out = T;
+	type O = T;
 }

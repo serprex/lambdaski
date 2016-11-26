@@ -1,0 +1,16 @@
+[package]
+name = "lambdaski-gen"
+version = "0.0.1"
+authors = ["serprex"]
+repository = "https://github.com/serprex/lambdaski"
+description = "Generate type level rust programs"
+license = "MIT"
+
+[dependencies]
+rustyline = "1.0"
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
