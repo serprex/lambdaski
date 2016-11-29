@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use std::str::Chars;
+use fnv::FnvHashMap;
 use eval::Eval;
 
 #[derive(Copy, Clone)]
@@ -47,7 +47,7 @@ impl A {
 }
 
 #[derive(Default)]
-pub struct Ski(HashMap<String, A>);
+pub struct Ski(FnvHashMap<String, A>);
 impl Ski {
 	fn skip_ws(s: &mut Chars) -> Option<Token> {
 		for c in s {
@@ -63,31 +63,21 @@ impl Ski {
 		None
 	}
 	fn parse_app0(&mut self, s: &mut Chars) -> Option<A> {
-		let a0;
-		if let Some(ch) = Ski::skip_ws(s) {
-			a0 = match ch {
-				Token::S => A::Term(C::S),
-				Token::K => A::Term(C::K),
-				Token::I => A::Term(C::I),
-				Token::OP =>
-					if let Some(a0) = self.parse_app(s) {
-						a0
-					} else {
-						return None
-					},
-				Token::CP => return None,
+		Ski::skip_ws(s).and_then(|ch|
+			match ch {
+				Token::S => Some(A::Term(C::S)),
+				Token::K => Some(A::Term(C::K)),
+				Token::I => Some(A::Term(C::I)),
+				Token::OP => self.parse_app(s),
+				Token::CP => None,
 			}
-		} else {
-			return None
-		}
-		Some(a0)
+		)
 	}
-	fn parse_app1(&mut self, a0: A, s: &mut Chars) -> A {
-		if let Some(a1) = self.parse_app0(s) {
-			self.parse_app1(A::App(Box::new((a0, a1))), s)
-		} else {
-			a0
+	fn parse_app1(&mut self, mut a0: A, s: &mut Chars) -> A {
+		while let Some(a1) = self.parse_app0(s) {
+			a0 = A::App(Box::new((a0, a1)));
 		}
+		a0
 	}
 	fn parse_app(&mut self, s: &mut Chars) -> Option<A> {
 		self.parse_app0(s).map(|a0| self.parse_app1(a0, s))
@@ -111,7 +101,7 @@ impl Eval for Ski {
 		})
 	}
 	fn spit(&self) -> String {
-		let mut ret = String::from("use lambdaski::ski::{S,K,I,A};\n");
+		let mut ret = String::from("use lambdaski::{S,K,I,A};\n");
 		for (k, v) in self.0.iter() {
 			ret.push_str("type ");
 			ret.push_str(k);
