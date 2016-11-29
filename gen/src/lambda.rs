@@ -409,7 +409,7 @@ impl Eval for Lambda {
 		let mut ret = String::from("use lambdaski::A;");
 		for (k, v) in self.0.iter() {
 			ret.push_str("//");
-			ret.push(k);
+			ret.push_str(k);
 			ret.push('\n');
 			v.push_rust(&mut ret);
 		}
