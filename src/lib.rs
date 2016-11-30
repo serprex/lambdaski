@@ -1,3 +1,5 @@
+pub mod typenum3;
+
 use std::marker::PhantomData;
 
 pub struct S;
@@ -41,6 +43,5 @@ mod tests {
 		//let _: <<S as A<I>>::O as A<I>>::O;
 		//let _: <<<S as A<I>>::O as A<I>>::O as A<<<S as A<I>>::O as A<I>>::O>>::O;
 		let _: <<<S as A<K>>::O as A<I>>::O as A<K>>::O;
-		assert!(false);
 	}
 }
