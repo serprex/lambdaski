@@ -5,24 +5,22 @@ use fnv::{FnvHashMap, FnvHashSet};
 use eval::Eval;
 
 enum Token {
-	Var(String), L(String), OP, CP,
+	Var(u32), L(String), OP, CP,
 }
 
 struct RustType {
-	pub vars: Vec<String>,
-	pub var: String,
+	pub vars: Vec<u32>,
 	pub expr: String,
 	pub wher: Vec<String>,
 	pub id: u32,
 }
 
 impl RustType {
-	pub fn new(name: String, idcell: &Cell<u32>) -> RustType {
+	pub fn new(idcell: &Cell<u32>) -> RustType {
 		let id = idcell.get();
 		idcell.set(id + 1);
 		RustType {
 			vars: Vec::new(),
-			var: name,
 			expr: String::new(),
 			wher: Vec::new(),
 			id: id,
@@ -31,7 +29,7 @@ impl RustType {
 }
 
 enum RustExpr {
-	Var(String),
+	Var(u32),
 	L(Box<(RustType, RustExpr)>),
 	Apply(Box<(RustExpr, RustExpr)>),
 }
@@ -39,8 +37,9 @@ enum RustExpr {
 impl RustExpr {
 	pub fn build_vars(&self, expr: &mut String, wher: &mut Vec<String>) {
 		match *self {
-			RustExpr::Var(ref var) => {
-				expr.push_str(var);
+			RustExpr::Var(var) => {
+				expr.push('X');
+				expr.push_str(&var.to_string());
 			},
 			RustExpr::L(ref bx) => {
 				let lrt = &bx.0;
@@ -48,7 +47,12 @@ impl RustExpr {
 				expr.push_str(&lrt.id.to_string());
 				if lrt.vars.len() > 0 {
 					expr.push('<');
-					expr.push_str(&lrt.vars.join(","));
+					for v in lrt.vars.iter() {
+						expr.push('X');
+						expr.push_str(&(v-1).to_string());
+						expr.push(',');
+					}
+					expr.pop();
 					expr.push('>');
 				}
 			},
@@ -93,25 +97,24 @@ impl RustExpr {
 }
 
 enum Expr {
-	Var(String),
-	L(Box<(String, Expr)>),
+	Var(u32),
+	L(Box<Expr>),
 	Apply(Box<(Expr, Expr)>),
 }
 
 impl Expr {
 	pub fn push_to_string(&self, s: &mut String) {
 		match *self {
-			Expr::Var(ref x) => s.push_str(x),
-			Expr::L(ref bx) => {
+			Expr::Var(id) => s.push_str(&id.to_string()),
+			Expr::L(ref expr) => {
 				s.push('\u{3bb}');
-				s.push_str(&bx.0);
 				s.push(' ');
-				bx.1.push_to_string(s);
+				expr.push_to_string(s);
 			},
 			Expr::Apply(ref bx) => {
 				s.push('(');
 				bx.0.push_to_string(s);
-				s.push(' ');
+					s.push(' ');
 				bx.1.push_to_string(s);
 				s.push(')');
 			},
@@ -126,14 +129,14 @@ impl Expr {
 
 	pub fn to_rust_expr<'a>(&'a self, scope: &'a RustScope<'a>, idcell: &'a Cell<u32>) -> RustExpr {
 		match *self {
-			Expr::Var(ref x) => {
+			Expr::Var(x) => {
 				scope.add(x);
-				RustExpr::Var(x.clone())
+				RustExpr::Var(x)
 			},
-			Expr::L(ref bx) => {
-				let newscope = scope.spawn(bx.0.clone());
-				let mut rt = RustType::new(newscope.name.clone(), idcell);
-				let rte = bx.1.to_rust_expr(&newscope, idcell);
+			Expr::L(ref expr) => {
+				let newscope = scope.spawn();
+				let mut rt = RustType::new(idcell);
+				let rte = expr.to_rust_expr(&newscope, idcell);
 				rt.vars = newscope.varvec();
 				rte.build_vars(&mut rt.expr, &mut rt.wher);
 				RustExpr::L(Box::new((rt, rte)))
@@ -163,38 +166,42 @@ impl Expr {
 			s.push_str(&idstr);
 			if rt.vars.len() > 0 {
 				s.push('<');
-				for ref v in rt.vars.iter() {
-					s.push_str(&v);
+				for v in rt.vars.iter() {
+					s.push('X');
+					s.push_str(&v.to_string());
 					s.push(',');
 				}
 				s.pop();
 				if rt.vars.len() == 1 {
-					s.push_str(">(pub PhantomData<");
-					s.push_str(&rt.vars[0]);
+					s.push_str(">(pub PhantomData<X");
+					s.push_str(&rt.vars[0].to_string());
 					s.push_str(">)");
 				} else {
 					s.push_str(">(pub PhantomData<(");
-					for ref v in rt.vars.iter() {
-						s.push_str(&v);
+					for v in rt.vars.iter() {
+						s.push('X');
+						s.push_str(&v.to_string());
 						s.push(',');
 					}
 					s.pop();
 					s.push_str(")>)");
 				}
 			}
-			s.push_str(";impl<");
-			for ref v in rt.vars.iter() {
-				s.push_str(&v);
-				s.push(',');
+			s.push_str(";impl<X1");
+			for v in rt.vars.iter() {
+				s.push_str(",X");
+				s.push_str(&v.to_string());
 			}
-			s.push_str(&rt.var);
-			s.push_str("> A<");
-			s.push_str(&rt.var);
-			s.push_str("> for L");
+			s.push_str("> A<X1> for L");
 			s.push_str(&idstr);
 			if rt.vars.len() > 0 {
 				s.push('<');
-				s.push_str(&rt.vars.join(","));
+				for v in rt.vars.iter() {
+					s.push('X');
+					s.push_str(&v.to_string());
+					s.push(',');
+				}
+				s.pop();
 				s.push('>');
 			}
 			if rt.wher.len() > 0 {
@@ -213,38 +220,31 @@ impl Expr {
 }
 
 trait RustScopeTrait {
-	fn check<'a, 'b>(&'a self, &'b str) -> u32;
-	fn add<'a, 'b>(&'a self, &'b str);
+	fn add<'a, 'b>(&'a self, n: u32);
 }
 
 struct RustScope<'a> {
 	uplink: Option<&'a RustScopeTrait>,
-	name: String,
-	id: u32,
-	vars: RefCell<FnvHashSet<String>>,
+	vars: RefCell<FnvHashSet<u32>>,
 }
 
 impl<'a> RustScope<'a> {
 	pub fn new() -> RustScope<'static> {
 		RustScope {
 			uplink: None,
-			name: String::new(),
-			id: 0,
 			vars: RefCell::default(),
 		}
 	}
 
-	pub fn spawn<'b>(&'b self, k: String) -> RustScope<'b>
+	pub fn spawn<'b>(&'b self) -> RustScope<'b>
 	{
 		RustScope {
 			uplink: Some(self),
-			name: k,
-			id: self.id + 1,
 			vars: RefCell::default(),
 		}
 	}
 
-	pub fn varvec(&self) -> Vec<String> {
+	pub fn varvec(&self) -> Vec<u32> {
 		let mut vave = self.vars.borrow().iter().cloned().collect::<Vec<_>>();
 		vave.sort();
 		vave
@@ -252,28 +252,20 @@ impl<'a> RustScope<'a> {
 }
 
 impl<'a> RustScopeTrait for RustScope<'a> {
-	fn check<'b, 'c>(&'b self, s: &'c str) -> u32 {
-		if self.name == s {
-			self.id
-		} else if let Some(uplink) = self.uplink {
-			uplink.check(s)
-		} else {
-			0
-		}
-	}
-
-	fn add(&self, s: &str) {
-		if self.name != s {
-			self.vars.borrow_mut().insert(String::from(s));
+	fn add(&self, n: u32) {
+		if n > 0 {
+			if n > 1 {
+				self.vars.borrow_mut().insert(n);
+			}
 			if let Some(uplink) = self.uplink {
-				uplink.add(s);
+				uplink.add(n - 1);
 			}
 		}
 	}
 }
 
 trait ParseScopeTrait {
-	fn check<'a, 'b>(&'a self, &'b str) -> bool;
+	fn check<'a, 'b>(&'a self, &'b str, n: u32) -> u32;
 }
 
 struct ParseScope<'a> {
@@ -300,13 +292,13 @@ impl<'a> ParseScope<'a> {
 }
 
 impl<'a> ParseScopeTrait for ParseScope<'a> {
-	fn check<'b, 'c>(&'b self, s: &'c str) -> bool {
+	fn check<'b, 'c>(&'b self, s: &'c str, n: u32) -> u32 {
 		if self.name == s {
-			true
+			n
 		} else if let Some(uplink) = self.uplink {
-			uplink.check(s)
+			uplink.check(s, n+1)
 		} else {
-			false
+			0
 		}
 	}
 }
@@ -326,8 +318,7 @@ impl Lambda {
 						islam = true;
 						break
 					},
-					ch@'a'...'z' | ch@'A'...'Z' => {
-						var.push(ch);
+					ch if !ch.is_whitespace() => {
 						break
 					}
 					_ => (),
@@ -335,7 +326,7 @@ impl Lambda {
 			}
 			if islam || var.len() > 0 {
 				while let Some(&ch) = s.peek() {
-					if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
+					if !ch.is_whitespace() && ch != '\u{3bb}' && ch != '(' && ch != ')' && ch != '\\' {
 						var.push(ch);
 						s.next();
 					} else {
@@ -347,8 +338,9 @@ impl Lambda {
 						return Some(Token::L(var))
 					}
 				} else {
-					if scope.check(&var) {
-						return Some(Token::Var(var))
+					let id = scope.check(&var, 1);
+					if id > 0 {
+						return Some(Token::Var(id))
 					} else {
 						continue
 					}
@@ -366,7 +358,7 @@ impl Lambda {
 						let newscope = scope.spawn(&var);
 						self.parse_app(&newscope, s)
 					};
-					expr.map(move|expr| Expr::L(Box::new((var, expr))))
+					expr.map(move|expr| Expr::L(Box::new(expr)))
 				},
 				Token::Var(var) => Some(Expr::Var(var)),
 				Token::OP => self.parse_app(scope, s),
