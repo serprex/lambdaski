@@ -1,11 +1,9 @@
-use std::cell::{Cell, RefCell};
-use std::iter::Peekable;
-use std::str::Chars;
+use std::cell::RefCell;
 use fnv::{FnvHashMap, FnvHashSet};
 use eval::Eval;
 
-enum Token {
-	Var(u32), L(String), OP, CP,
+enum Token<'a> {
+	Var(u32), L(&'a str), OP, CP,
 }
 
 struct RustType {
@@ -16,9 +14,9 @@ struct RustType {
 }
 
 impl RustType {
-	pub fn new(idcell: &Cell<u32>) -> RustType {
-		let id = idcell.get();
-		idcell.set(id + 1);
+	pub fn new(idcell: &mut u32) -> RustType {
+		let id = *idcell;
+		*idcell += 1;
 		RustType {
 			vars: Vec::new(),
 			expr: String::new(),
@@ -127,7 +125,7 @@ impl Expr {
 		ret
 	}
 
-	pub fn to_rust_expr<'a>(&'a self, scope: &'a RustScope<'a>, idcell: &'a Cell<u32>) -> RustExpr {
+	pub fn to_rust_expr<'a, 'b>(&'a self, scope: &'a RustScope<'a>, idcell: &'a mut u32) -> RustExpr {
 		match *self {
 			Expr::Var(x) => {
 				scope.add(x);
@@ -152,8 +150,8 @@ impl Expr {
 	pub fn build_rust(&self) -> Vec<RustType> {
 		let mut ret = Vec::new();
 		let root = RustScope::new();
-		let idcell = Cell::new(0);
-		let rsexpr = self.to_rust_expr(&root, &idcell);
+		let mut idcell = 0;
+		let rsexpr = self.to_rust_expr(&root, &mut idcell);
 		rsexpr.collect(&mut ret);
 		ret
 	}
@@ -306,52 +304,61 @@ impl<'a> ParseScopeTrait for ParseScope<'a> {
 #[derive(Default)]
 pub struct Lambda(FnvHashMap<String, Expr>);
 impl Lambda {
-	fn skip_ws<'a, 'b>(scope: &'a ParseScope<'b>, s: &'a mut Peekable<Chars>) -> Option<Token> {
+	fn skip_ws<'a, 'b, 'c>(scope: &'c ParseScope<'b>, s: &'c mut &'a str) -> Option<Token<'a>> {
+		let mut schs = s.char_indices();
+		let chs = schs.as_str();
 		loop {
-			let mut var = String::new();
-			let mut islam = false;
-			while let Some(c) = s.next() {
-				match c {
-					'(' => return Some(Token::OP),
-					')' => return Some(Token::CP),
-					'\u{3bb}' | '\\' => {
-						islam = true;
-						break
-					},
-					ch if !ch.is_whitespace() => {
-						break
-					}
-					_ => (),
-				}
-			}
-			if islam || var.len() > 0 {
-				while let Some(&ch) = s.peek() {
-					if !ch.is_whitespace() && ch != '\u{3bb}' && ch != '(' && ch != ')' && ch != '\\' {
-						var.push(ch);
-						s.next();
-					} else {
-						break
-					}
-				}
-				if islam {
-					if var.len() > 0 {
-						return Some(Token::L(var))
+			let islam;
+			let varstart;
+			loop {
+				if let Some((idx, c)) = schs.next() {
+					match c {
+						'(' => {
+							*s = &schs.as_str();
+							return Some(Token::OP)
+						},
+						')' => {
+							*s = &schs.as_str();
+							return Some(Token::CP)
+						},
+						'\u{3bb}' | '\\' => {
+							islam = true;
+							schs.next();
+							varstart = idx + c.len_utf8();
+							break
+						},
+						c if !c.is_whitespace() => {
+							islam = false;
+							varstart = idx;
+							break
+						}
+						_ => (),
 					}
 				} else {
-					let id = scope.check(&var, 1);
-					if id > 0 {
-						return Some(Token::Var(id))
-					} else {
-						continue
-					}
+					*s = &schs.as_str();
+					return None
 				}
 			}
-			return None
+			let varend = varstart + chs[varstart..].find(|ch:char| ch.is_whitespace() || ch == '\u{3bb}' || ch == '(' || ch == ')' || ch == '\\').unwrap_or(chs.len());
+			let var = &chs[varstart..varend];
+			*s = &chs[varend..];
+			if islam {
+				if var.len() > 0 {
+					return Some(Token::L(var))
+				} else {
+					return None;
+				}
+			} else {
+				let id = scope.check(var, 1);
+				if id > 0 {
+					return Some(Token::Var(id))
+				}
+			}
 		}
 	}
 
-	fn parse_app0<'a, 'b>(&'a mut self, scope: &'a ParseScope<'b>, s: &'a mut Peekable<Chars>) -> Option<Expr> {
-		Lambda::skip_ws(scope, s).and_then(|tok|
+	fn parse_app0<'a, 'b, 'c>(&'c self, scope: &'c ParseScope<'b>, s: &'c mut &'a str) -> Option<Expr> {
+		Lambda::skip_ws(scope, s).and_then(move|tok|
 			match tok {
 				Token::L(var) =>{
 					let expr = {
@@ -367,21 +374,23 @@ impl Lambda {
 		)
 	}
 
-	fn parse_app1<'a, 'b>(&'a mut self, mut a0: Expr, scope: &'a ParseScope<'b>, s: &'a mut Peekable<Chars>) -> Expr {
+	fn parse_app1<'a, 'b, 'c>(&'c self, mut a0: Expr, scope: &'c ParseScope<'b>, mut s: &'c mut &'a str) -> Expr {
 		while let Some(a1) = self.parse_app0(scope, s) {
 			a0 = Expr::Apply(Box::new((a0, a1)));
 		}
 		a0
 	}
 
-	fn parse_app<'a, 'b>(&'a mut self, scope: &'a ParseScope<'b>, s: &'a mut Peekable<Chars>) -> Option<Expr> {
-		self.parse_app0(scope, s).map(|a0| self.parse_app1(a0, scope, s))
+	fn parse_app<'a, 'b, 'c>(&'c self, scope: &'c ParseScope<'b>, s: &'c mut &'a str) -> Option<Expr> {
+		self.parse_app0(scope, s).map(move|a0| self.parse_app1(a0, scope, s))
 	}
 }
+
 impl Eval for Lambda {
 	fn line(&mut self, s: &str) -> Option<String> {
 		let root = ParseScope::new();
-		Some(if let Some(expr) = self.parse_app(&root, &mut s.chars().peekable()) {
+		let mut ss = s;
+		Some(if let Some(expr) = self.parse_app(&root, &mut ss) {
 			expr.to_string()
 		} else {
 			String::new()
@@ -389,7 +398,8 @@ impl Eval for Lambda {
 	}
 	fn set(&mut self, k: String, s: &str) -> Option<String> {
 		let root = ParseScope::new();
-		Some(if let Some(expr) = self.parse_app(&root, &mut s.chars().peekable()) {
+		let mut ss = s;
+		Some(if let Some(expr) = self.parse_app(&root, &mut ss) {
 			let ret = expr.to_string();
 			self.0.insert(k, expr);
 			ret
