@@ -218,7 +218,7 @@ impl Expr {
 }
 
 trait RustScopeTrait {
-	fn add<'a, 'b>(&'a self, n: u32);
+	fn add(&self, n: u32);
 }
 
 struct RustScope<'a> {
@@ -262,51 +262,21 @@ impl<'a> RustScopeTrait for RustScope<'a> {
 	}
 }
 
-trait ParseScopeTrait {
-	fn check<'a, 'b>(&'a self, &'b str, n: u32) -> u32;
-}
-
-struct ParseScope<'a> {
-	uplink: Option<&'a ParseScopeTrait>,
-	name: &'a str,
-}
-
-impl<'a> ParseScope<'a> {
-	pub fn new() -> ParseScope<'static> {
-		ParseScope {
-			uplink: None,
-			name: "",
+fn check_pscope<'a, 'b>(scope: &'b Vec<&'a str>, s: &'b str) -> Option<u32> {
+	for (idx, name) in scope.iter().cloned().rev().enumerate() {
+		if name == s {
+			return Some(idx as u32)
 		}
 	}
-
-	pub fn spawn<'b>(&'a self, k: &'b str) -> ParseScope<'b>
-		where 'a: 'b
-	{
-		ParseScope {
-			uplink: Some(self as &ParseScopeTrait),
-			name: k,
-		}
-	}
-}
-
-impl<'a> ParseScopeTrait for ParseScope<'a> {
-	fn check<'b, 'c>(&'b self, s: &'c str, n: u32) -> u32 {
-		if self.name == s {
-			n
-		} else if let Some(uplink) = self.uplink {
-			uplink.check(s, n+1)
-		} else {
-			0
-		}
-	}
+	None
 }
 
 #[derive(Default)]
 pub struct Lambda(FnvHashMap<String, Expr>);
 impl Lambda {
-	fn skip_ws<'a, 'b, 'c>(scope: &'c ParseScope<'b>, s: &'c mut &'a str) -> Option<Token<'a>> {
+	fn skip_ws<'a, 'b>(scope: &'a Vec<&'b str>, s: &'a mut &'b str) -> Option<Token<'b>> {
 		let mut schs = s.char_indices();
-		let chs = schs.as_str();
+		let chs = *s;
 		loop {
 			let islam;
 			let varstart;
@@ -349,23 +319,19 @@ impl Lambda {
 					return None;
 				}
 			} else {
-				let id = scope.check(var, 1);
-				if id > 0 {
+				if let Some(id) = check_pscope(scope, var) {
 					return Some(Token::Var(id))
 				}
 			}
 		}
 	}
 
-	fn parse_app0<'a, 'b, 'c>(&'c self, scope: &'c ParseScope<'b>, s: &'c mut &'a str) -> Option<Expr> {
+	fn parse_app0<'a, 'b>(&'a self, scope: &'a mut Vec<&'b str>, s: &'a mut &'b str) -> Option<Expr> {
 		Lambda::skip_ws(scope, s).and_then(move|tok|
 			match tok {
 				Token::L(var) =>{
-					let expr = {
-						let newscope = scope.spawn(&var);
-						self.parse_app(&newscope, s)
-					};
-					expr.map(move|expr| Expr::L(Box::new(expr)))
+					scope.push(var);
+					self.parse_app(scope, s).map(move|expr| Expr::L(Box::new(expr)))
 				},
 				Token::Var(var) => Some(Expr::Var(var)),
 				Token::OP => self.parse_app(scope, s),
@@ -374,32 +340,32 @@ impl Lambda {
 		)
 	}
 
-	fn parse_app1<'a, 'b, 'c>(&'c self, mut a0: Expr, scope: &'c ParseScope<'b>, mut s: &'c mut &'a str) -> Expr {
+	fn parse_app1<'a, 'b>(&'a self, mut a0: Expr, scope: &'a mut Vec<&'b str>, mut s: &'a mut &'b str) -> Expr {
 		while let Some(a1) = self.parse_app0(scope, s) {
 			a0 = Expr::Apply(Box::new((a0, a1)));
 		}
 		a0
 	}
 
-	fn parse_app<'a, 'b, 'c>(&'c self, scope: &'c ParseScope<'b>, s: &'c mut &'a str) -> Option<Expr> {
+	fn parse_app<'a, 'b>(&'a self, scope: &'a mut Vec<&'b str>, s: &'a mut &'b str) -> Option<Expr> {
 		self.parse_app0(scope, s).map(move|a0| self.parse_app1(a0, scope, s))
 	}
 }
 
 impl Eval for Lambda {
 	fn line(&mut self, s: &str) -> Option<String> {
-		let root = ParseScope::new();
+		let mut root = Vec::new();
 		let mut ss = s;
-		Some(if let Some(expr) = self.parse_app(&root, &mut ss) {
+		Some(if let Some(expr) = self.parse_app(&mut root, &mut ss) {
 			expr.to_string()
 		} else {
 			String::new()
 		})
 	}
 	fn set(&mut self, k: String, s: &str) -> Option<String> {
-		let root = ParseScope::new();
+		let mut root = Vec::new();
 		let mut ss = s;
-		Some(if let Some(expr) = self.parse_app(&root, &mut ss) {
+		Some(if let Some(expr) = self.parse_app(&mut root, &mut ss) {
 			let ret = expr.to_string();
 			self.0.insert(k, expr);
 			ret
