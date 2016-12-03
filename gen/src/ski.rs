@@ -103,7 +103,7 @@ impl Eval for Ski {
 	fn spit(&self) -> String {
 		let mut ret = String::from("use lambdaski::{S,K,I,A};\n");
 		for (k, v) in self.0.iter() {
-			ret.push_str("type ");
+			ret.push_str("pub type ");
 			ret.push_str(k);
 			ret.push('=');
 			v.push_rust(&mut ret);

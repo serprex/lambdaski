@@ -1,4 +1,5 @@
-use std::fmt;
+use std::fmt::{self, Write};
+use std::rc::Rc;
 use fnv::{FnvHashMap, FnvHashSet};
 use eval::Eval;
 
@@ -13,22 +14,9 @@ struct RustType {
 	pub id: usize,
 }
 
-impl RustType {
-	pub fn new(idcell: &mut usize) -> RustType {
-		let id = *idcell;
-		*idcell += 1;
-		RustType {
-			vars: Vec::new(),
-			expr: String::new(),
-			wher: Vec::new(),
-			id: id,
-		}
-	}
-}
-
 enum RustExpr {
 	Var(usize),
-	L(Box<(RustType, RustExpr)>),
+	L(Box<(Rc<RustType>, RustExpr)>),
 	Apply(Box<(RustExpr, RustExpr)>),
 }
 
@@ -36,19 +24,15 @@ impl RustExpr {
 	pub fn build_vars(&self, expr: &mut String, wher: &mut Vec<String>) {
 		match *self {
 			RustExpr::Var(var) => {
-				expr.push('X');
-				expr.push_str(&var.to_string());
+				write!(expr, "X{}", var).ok();
 			},
 			RustExpr::L(ref bx) => {
 				let lrt = &bx.0;
-				expr.push('L');
-				expr.push_str(&lrt.id.to_string());
+				write!(expr, "L{}", lrt.id).ok();
 				if lrt.vars.len() > 0 {
 					expr.push('<');
 					for v in lrt.vars.iter() {
-						expr.push('X');
-						expr.push_str(&(v-1).to_string());
-						expr.push(',');
+						write!(expr, "X{},", v-1).ok();
 					}
 					expr.pop();
 					expr.push('>');
@@ -59,38 +43,54 @@ impl RustExpr {
 				let mut bx1 = String::new();
 				bx.0.build_vars(&mut bx0, wher);
 				bx.1.build_vars(&mut bx1, wher);
-				expr.push('<');
-				expr.push_str(&bx0);
-				expr.push_str(" as A<");
-				expr.push_str(&bx1);
-				expr.push_str(">>::O");
-				let mut wh = String::new();
-				wh.push_str(&bx0);
-				wh.push(':');
-				wh.push_str("A<");
-				wh.push_str(&bx1);
-				wh.push('>');
-				wher.push(wh);
+				write!(expr, "<{} as A<{}>>::O", bx0, bx1).ok();
+				wher.push(format!("{}:A<{}>", bx0, bx1));
 			},
 		}
 	}
+}
 
-	pub fn collect(self, types: &mut Vec<RustType>) {
-		match self {
-			RustExpr::Var(_) => (),
-			RustExpr::L(bx) => {
-				let tyex = *bx;
-				let (ty, ex) = tyex;
-				types.push(ty);
-				ex.collect(types);
+impl RustType {
+	pub fn push_rust<'a>(&self, s: &mut String) {
+		write!(s, "struct L{}", self.id).ok();
+		if self.vars.len() > 0 {
+			s.push('<');
+			for v in self.vars.iter() {
+				write!(s, "X{},", v).ok();
 			}
-			RustExpr::Apply(bx) => {
-				let exs = *bx;
-				let (ex0, ex1) = exs;
-				ex0.collect(types);
-				ex1.collect(types);
+			s.pop();
+			if self.vars.len() == 1 {
+				write!(s, ">(pub PhantomData<X{}>)", self.vars[0]).ok();
+			} else {
+				s.push_str(">(pub PhantomData<(");
+				for v in self.vars.iter() {
+					write!(s, "X{},", v).ok();
+				}
+				s.pop();
+				s.push_str(")>)");
 			}
 		}
+		s.push_str(";impl<X1");
+		for v in self.vars.iter() {
+			write!(s, ",X{}", v).ok();
+		}
+		write!(s, "> A<X1> for L{}", self.id).ok();
+		if self.vars.len() > 0 {
+			s.push('<');
+			for v in self.vars.iter() {
+				write!(s, "X{},", v).ok();
+			}
+			s.pop();
+			s.push('>');
+		}
+		if self.wher.len() > 0 {
+			s.push_str(" where ");
+			for ref w in self.wher.iter() {
+				write!(s, "{},", w).ok();
+			}
+			s.pop();
+		}
+		write!(s, "{{type O={}}};\n", self.expr).ok();
 	}
 }
 
@@ -101,7 +101,7 @@ enum Expr {
 }
 
 impl fmt::Display for Expr {
-	fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
 			Expr::Var(id) => write!(f, "{}", id),
 			Expr::L(ref expr) => write!(f, "\u{3bb}{}", expr),
@@ -111,7 +111,7 @@ impl fmt::Display for Expr {
 }
 
 impl Expr {
-	pub fn to_rust_expr<'a, 'b>(&'a self, scope: &'a mut Vec<FnvHashSet<usize>>, idcell: &'a mut usize) -> RustExpr {
+	pub fn to_rust_expr(&self, scope: &mut Vec<FnvHashSet<usize>>, idcell: &mut usize, typecache: &mut FnvHashMap<String, Rc<RustType>>) -> RustExpr {
 		match *self {
 			Expr::Var(x) => {
 				rscope_add(scope, x);
@@ -119,87 +119,35 @@ impl Expr {
 			},
 			Expr::L(ref expr) => {
 				scope.push(FnvHashSet::default());
-				let mut rt = RustType::new(idcell);
-				let rte = expr.to_rust_expr(scope, idcell);
-				rt.vars = varvec(scope.pop().unwrap());
-				rte.build_vars(&mut rt.expr, &mut rt.wher);
+				let mut rsexpr = String::new();
+				let mut rswher = Vec::new();
+				let rte = expr.to_rust_expr(scope, idcell, typecache);
+				rte.build_vars(&mut rsexpr, &mut rswher);
+				if let Some(rt) = typecache.get(&rsexpr) {
+					return RustExpr::L(Box::new((rt.clone(), rte)));
+				}
+				let key = rsexpr.clone();
+				let rt = Rc::new(RustType {
+					vars: varvec(scope.pop().unwrap()),
+					expr: rsexpr,
+					wher: rswher,
+					id: *idcell,
+				});
+				*idcell += 1;
+				typecache.insert(key, rt.clone());
 				RustExpr::L(Box::new((rt, rte)))
 			},
 			Expr::Apply(ref bx) => {
-				let rt0 = bx.0.to_rust_expr(scope, idcell);
-				let rt1 = bx.1.to_rust_expr(scope, idcell);
+				let rt0 = bx.0.to_rust_expr(scope, idcell, typecache);
+				let rt1 = bx.1.to_rust_expr(scope, idcell, typecache);
 				RustExpr::Apply(Box::new((rt0, rt1)))
 			},
 		}
 	}
 
-	pub fn build_rust(&self) -> Vec<RustType> {
-		let mut ret = Vec::new();
+	pub fn build_rust(&self, typecache: &mut FnvHashMap<String, Rc<RustType>>) -> RustExpr {
 		let mut root = Vec::new();
-		let mut idcell = 0;
-		let rsexpr = self.to_rust_expr(&mut root, &mut idcell);
-		rsexpr.collect(&mut ret);
-		ret
-	}
-
-	pub fn push_rust(&self, s: &mut String) {
-		let rts = self.build_rust();
-		for rt in rts {
-			s.push_str("struct L");
-			let idstr = rt.id.to_string();
-			s.push_str(&idstr);
-			if rt.vars.len() > 0 {
-				s.push('<');
-				for v in rt.vars.iter() {
-					s.push('X');
-					s.push_str(&v.to_string());
-					s.push(',');
-				}
-				s.pop();
-				if rt.vars.len() == 1 {
-					s.push_str(">(pub PhantomData<X");
-					s.push_str(&rt.vars[0].to_string());
-					s.push_str(">)");
-				} else {
-					s.push_str(">(pub PhantomData<(");
-					for v in rt.vars.iter() {
-						s.push('X');
-						s.push_str(&v.to_string());
-						s.push(',');
-					}
-					s.pop();
-					s.push_str(")>)");
-				}
-			}
-			s.push_str(";impl<X1");
-			for v in rt.vars.iter() {
-				s.push_str(",X");
-				s.push_str(&v.to_string());
-			}
-			s.push_str("> A<X1> for L");
-			s.push_str(&idstr);
-			if rt.vars.len() > 0 {
-				s.push('<');
-				for v in rt.vars.iter() {
-					s.push('X');
-					s.push_str(&v.to_string());
-					s.push(',');
-				}
-				s.pop();
-				s.push('>');
-			}
-			if rt.wher.len() > 0 {
-				s.push_str(" where ");
-				for ref w in rt.wher.iter() {
-					s.push_str(&w);
-					s.push(',');
-				}
-				s.pop();
-			}
-			s.push_str("{type O=");
-			s.push_str(&rt.expr);
-			s.push_str(";}\n");
-		}
+		self.to_rust_expr(&mut root, &mut 0, typecache)
 	}
 }
 
@@ -267,7 +215,7 @@ impl Lambda {
 				if var.len() > 0 {
 					return Some(Token::L(var))
 				} else {
-					return None;
+					return None
 				}
 			} else {
 				if let Some(id) = check_pscope(scope, var) {
@@ -344,10 +292,19 @@ impl Eval for Lambda {
 	}
 	fn spit(&self) -> String {
 		let mut ret = String::from("use lambdaski::A;");
+		let mut types = FnvHashMap::default();
 		for (k, v) in self.0.iter() {
-			ret.push_str("//");
+			let rsexpr = v.build_rust(&mut types);
+			ret.push_str("pub type ");
 			ret.push_str(k);
-			ret.push('\n');
+			ret.push('=');
+			let mut wher = Vec::new();
+			let mut expr = String::new();
+			rsexpr.build_vars(&mut expr, &mut wher);
+			ret.push_str(&expr);
+			ret.push(';');
+		}
+		for v in types.values() {
 			v.push_rust(&mut ret);
 		}
 		ret
