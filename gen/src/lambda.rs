@@ -1,20 +1,20 @@
-use std::cell::RefCell;
+use std::fmt;
 use fnv::{FnvHashMap, FnvHashSet};
 use eval::Eval;
 
 enum Token<'a> {
-	Var(u32), L(&'a str), OP, CP,
+	Var(usize), L(&'a str), OP, CP,
 }
 
 struct RustType {
-	pub vars: Vec<u32>,
+	pub vars: Vec<usize>,
 	pub expr: String,
 	pub wher: Vec<String>,
-	pub id: u32,
+	pub id: usize,
 }
 
 impl RustType {
-	pub fn new(idcell: &mut u32) -> RustType {
+	pub fn new(idcell: &mut usize) -> RustType {
 		let id = *idcell;
 		*idcell += 1;
 		RustType {
@@ -27,7 +27,7 @@ impl RustType {
 }
 
 enum RustExpr {
-	Var(u32),
+	Var(usize),
 	L(Box<(RustType, RustExpr)>),
 	Apply(Box<(RustExpr, RustExpr)>),
 }
@@ -95,47 +95,33 @@ impl RustExpr {
 }
 
 enum Expr {
-	Var(u32),
+	Var(usize),
 	L(Box<Expr>),
 	Apply(Box<(Expr, Expr)>),
 }
 
-impl Expr {
-	pub fn push_to_string(&self, s: &mut String) {
+impl fmt::Display for Expr {
+	fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
 		match *self {
-			Expr::Var(id) => s.push_str(&id.to_string()),
-			Expr::L(ref expr) => {
-				s.push('\u{3bb}');
-				s.push(' ');
-				expr.push_to_string(s);
-			},
-			Expr::Apply(ref bx) => {
-				s.push('(');
-				bx.0.push_to_string(s);
-					s.push(' ');
-				bx.1.push_to_string(s);
-				s.push(')');
-			},
+			Expr::Var(id) => write!(f, "{}", id),
+			Expr::L(ref expr) => write!(f, "\u{3bb}{}", expr),
+			Expr::Apply(ref bx) => write!(f, "({} {})", bx.0, bx.1),
 		}
 	}
+}
 
-	pub fn to_string(&self) -> String {
-		let mut ret = String::new();
-		self.push_to_string(&mut ret);
-		ret
-	}
-
-	pub fn to_rust_expr<'a, 'b>(&'a self, scope: &'a RustScope<'a>, idcell: &'a mut u32) -> RustExpr {
+impl Expr {
+	pub fn to_rust_expr<'a, 'b>(&'a self, scope: &'a mut Vec<FnvHashSet<usize>>, idcell: &'a mut usize) -> RustExpr {
 		match *self {
 			Expr::Var(x) => {
-				scope.add(x);
+				rscope_add(scope, x);
 				RustExpr::Var(x)
 			},
 			Expr::L(ref expr) => {
-				let newscope = scope.spawn();
+				scope.push(FnvHashSet::default());
 				let mut rt = RustType::new(idcell);
-				let rte = expr.to_rust_expr(&newscope, idcell);
-				rt.vars = newscope.varvec();
+				let rte = expr.to_rust_expr(scope, idcell);
+				rt.vars = varvec(scope.pop().unwrap());
 				rte.build_vars(&mut rt.expr, &mut rt.wher);
 				RustExpr::L(Box::new((rt, rte)))
 			},
@@ -149,9 +135,9 @@ impl Expr {
 
 	pub fn build_rust(&self) -> Vec<RustType> {
 		let mut ret = Vec::new();
-		let root = RustScope::new();
+		let mut root = Vec::new();
 		let mut idcell = 0;
-		let rsexpr = self.to_rust_expr(&root, &mut idcell);
+		let rsexpr = self.to_rust_expr(&mut root, &mut idcell);
 		rsexpr.collect(&mut ret);
 		ret
 	}
@@ -217,58 +203,22 @@ impl Expr {
 	}
 }
 
-trait RustScopeTrait {
-	fn add(&self, n: u32);
+pub fn varvec(scope: FnvHashSet<usize>) -> Vec<usize> {
+	let mut vave = scope.into_iter().collect::<Vec<_>>();
+	vave.sort();
+	vave
 }
 
-struct RustScope<'a> {
-	uplink: Option<&'a RustScopeTrait>,
-	vars: RefCell<FnvHashSet<u32>>,
-}
-
-impl<'a> RustScope<'a> {
-	pub fn new() -> RustScope<'static> {
-		RustScope {
-			uplink: None,
-			vars: RefCell::default(),
-		}
-	}
-
-	pub fn spawn<'b>(&'b self) -> RustScope<'b>
-	{
-		RustScope {
-			uplink: Some(self),
-			vars: RefCell::default(),
-		}
-	}
-
-	pub fn varvec(&self) -> Vec<u32> {
-		let mut vave = self.vars.borrow().iter().cloned().collect::<Vec<_>>();
-		vave.sort();
-		vave
+fn rscope_add(scope: &mut Vec<FnvHashSet<usize>>, mut n: usize) {
+	for set in scope.iter_mut().rev() {
+		if n == 0 { return }
+		set.insert(n);
+		n -= 1;
 	}
 }
 
-impl<'a> RustScopeTrait for RustScope<'a> {
-	fn add(&self, n: u32) {
-		if n > 0 {
-			if n > 1 {
-				self.vars.borrow_mut().insert(n);
-			}
-			if let Some(uplink) = self.uplink {
-				uplink.add(n - 1);
-			}
-		}
-	}
-}
-
-fn check_pscope<'a, 'b>(scope: &'b Vec<&'a str>, s: &'b str) -> Option<u32> {
-	for (idx, name) in scope.iter().cloned().rev().enumerate() {
-		if name == s {
-			return Some(idx as u32)
-		}
-	}
-	None
+fn check_pscope<'a, 'b>(scope: &'b Vec<&'a str>, s: &'b str) -> Option<usize> {
+	scope.iter().cloned().rev().position(|name| name == s)
 }
 
 #[derive(Default)]
@@ -293,7 +243,6 @@ impl Lambda {
 						},
 						'\u{3bb}' | '\\' => {
 							islam = true;
-							schs.next();
 							varstart = idx + c.len_utf8();
 							break
 						},
@@ -309,7 +258,9 @@ impl Lambda {
 					return None
 				}
 			}
-			let varend = varstart + chs[varstart..].find(|ch:char| ch.is_whitespace() || ch == '\u{3bb}' || ch == '(' || ch == ')' || ch == '\\').unwrap_or(chs.len());
+			let varend = if let Some(varend) = chs[varstart..].find(|ch:char| ch.is_whitespace() || ch == '\u{3bb}' || ch == '(' || ch == ')' || ch == '\\') {
+				varstart + varend
+			} else { chs.len() };
 			let var = &chs[varstart..varend];
 			*s = &chs[varend..];
 			if islam {
@@ -326,47 +277,65 @@ impl Lambda {
 		}
 	}
 
-	fn parse_app0<'a, 'b>(&'a self, scope: &'a mut Vec<&'b str>, s: &'a mut &'b str) -> Option<Expr> {
-		Lambda::skip_ws(scope, s).and_then(move|tok|
-			match tok {
-				Token::L(var) =>{
-					scope.push(var);
-					self.parse_app(scope, s).map(move|expr| Expr::L(Box::new(expr)))
-				},
-				Token::Var(var) => Some(Expr::Var(var)),
-				Token::OP => self.parse_app(scope, s),
-				Token::CP => None,
-			}
-		)
+	fn parse_app0<'a, 'b>(&'a self, scope: &'a mut Vec<&'b str>, s: &'a mut &'b str, p: &mut Vec<usize>, pc: &mut usize) -> Option<Expr> {
+		if *pc > 0 {
+			*pc -= 1;
+			None
+		} else {
+			Lambda::skip_ws(scope, s).and_then(move|tok|
+				match tok {
+					Token::L(var) => {
+						scope.push(var);
+						self.parse_app(scope, s, p, pc).map(move|expr| Expr::L(Box::new(expr)))
+					},
+					Token::Var(var) => Some(Expr::Var(var)),
+					Token::OP => {
+						p.push(scope.len());
+						self.parse_app(scope, s, p, pc)
+					},
+					Token::CP => {
+						if let Some(sl) = p.pop() {
+							*pc = scope.len() - sl;
+							scope.truncate(sl);
+						}
+						None
+					},
+				}
+			)
+		}
 	}
 
-	fn parse_app1<'a, 'b>(&'a self, mut a0: Expr, scope: &'a mut Vec<&'b str>, mut s: &'a mut &'b str) -> Expr {
-		while let Some(a1) = self.parse_app0(scope, s) {
+	fn parse_app1<'a, 'b>(&'a self, mut a0: Expr, scope: &'a mut Vec<&'b str>, mut s: &'a mut &'b str, p: &mut Vec<usize>, pc: &mut usize) -> Expr {
+		while let Some(a1) = self.parse_app0(scope, s, p, pc) {
 			a0 = Expr::Apply(Box::new((a0, a1)));
 		}
 		a0
 	}
 
-	fn parse_app<'a, 'b>(&'a self, scope: &'a mut Vec<&'b str>, s: &'a mut &'b str) -> Option<Expr> {
-		self.parse_app0(scope, s).map(move|a0| self.parse_app1(a0, scope, s))
+	fn parse_app<'a, 'b>(&'a self, scope: &'a mut Vec<&'b str>, s: &'a mut &'b str, p: &mut Vec<usize>, pc: &mut usize) -> Option<Expr> {
+		self.parse_app0(scope, s, p, pc).map(move|a0| self.parse_app1(a0, scope, s, p, pc))
 	}
 }
 
 impl Eval for Lambda {
 	fn line(&mut self, s: &str) -> Option<String> {
 		let mut root = Vec::new();
+		let mut parens = Vec::new();
+		let mut pcount = 0;
 		let mut ss = s;
-		Some(if let Some(expr) = self.parse_app(&mut root, &mut ss) {
-			expr.to_string()
+		Some(if let Some(expr) = self.parse_app(&mut root, &mut ss, &mut parens, &mut pcount) {
+			format!("{}", expr)
 		} else {
 			String::new()
 		})
 	}
 	fn set(&mut self, k: String, s: &str) -> Option<String> {
 		let mut root = Vec::new();
+		let mut parens = Vec::new();
+		let mut pcount = 0;
 		let mut ss = s;
-		Some(if let Some(expr) = self.parse_app(&mut root, &mut ss) {
-			let ret = expr.to_string();
+		Some(if let Some(expr) = self.parse_app(&mut root, &mut ss, &mut parens, &mut pcount) {
+			let ret = format!("{}", expr);
 			self.0.insert(k, expr);
 			ret
 		} else {
@@ -382,5 +351,17 @@ impl Eval for Lambda {
 			v.push_rust(&mut ret);
 		}
 		ret
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use eval::Eval;
+	use super::*;
+	#[test]
+	fn test_parse()
+	{
+		let mut x = Lambda::default();
+		assert_eq!(x.line("\\x \\y \\z (x y) (z y x (\\x x y) z)").unwrap(), "\u{3bb}\u{3bb}\u{3bb}((2 1) ((((0 1) 2) \u{3bb}(0 2)) 0))");
 	}
 }
