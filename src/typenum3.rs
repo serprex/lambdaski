@@ -194,7 +194,7 @@ impl<X: ToInt> ToInt for I<X, N> {
 	}
 }
 
-
+#[cfg(test)]
 mod t3sts {
 	use super::*;
 	#[test]

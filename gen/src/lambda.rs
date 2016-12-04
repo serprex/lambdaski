@@ -70,11 +70,11 @@ impl RustType {
 				s.push_str(")>)");
 			}
 		}
-		s.push_str(";impl<X1");
+		s.push_str(";impl<X0");
 		for v in self.vars.iter() {
 			write!(s, ",X{}", v).ok();
 		}
-		write!(s, "> A<X1> for L{}", self.id).ok();
+		write!(s, "> A<X0> for L{}", self.id).ok();
 		if self.vars.len() > 0 {
 			s.push('<');
 			for v in self.vars.iter() {
@@ -90,7 +90,7 @@ impl RustType {
 			}
 			s.pop();
 		}
-		write!(s, "{{type O={}}};\n", self.expr).ok();
+		write!(s, "{{type O={};}}\n", self.expr).ok();
 	}
 }
 
@@ -291,18 +291,14 @@ impl Eval for Lambda {
 		})
 	}
 	fn spit(&self) -> String {
-		let mut ret = String::from("use lambdaski::A;");
+		let mut ret = String::from("use std::marker::PhantomData;use lambdaski::A;\n");
 		let mut types = FnvHashMap::default();
 		for (k, v) in self.0.iter() {
 			let rsexpr = v.build_rust(&mut types);
-			ret.push_str("pub type ");
-			ret.push_str(k);
-			ret.push('=');
 			let mut wher = Vec::new();
 			let mut expr = String::new();
 			rsexpr.build_vars(&mut expr, &mut wher);
-			ret.push_str(&expr);
-			ret.push(';');
+			write!(ret, "pub type {}={};\n", k, expr).ok();
 		}
 		for v in types.values() {
 			v.push_rust(&mut ret);
