@@ -104,8 +104,13 @@ impl fmt::Display for Expr {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
 			Expr::Var(id) => write!(f, "{}", id),
-			Expr::L(ref expr) => write!(f, "\u{3bb}{}", expr),
-			Expr::Apply(ref bx) => write!(f, "({} {})", bx.0, bx.1),
+			Expr::L(ref expr) => write!(f, "(\u{3bb}{})", expr),
+			Expr::Apply(ref bx) => {
+				match **bx {
+					(_, Expr::Apply(_)) => write!(f, "{} ({})", bx.0, bx.1),
+					_ => write!(f, "{} {}", bx.0, bx.1),
+				}
+			},
 		}
 	}
 }
@@ -315,6 +320,6 @@ mod test {
 	fn test_parse()
 	{
 		let mut x = Lambda::default();
-		assert_eq!(x.line("\\x \\y \\z (x y) (z y x (\\x x y) z)").unwrap(), "\u{3bb}\u{3bb}\u{3bb}((2 1) ((((0 1) 2) \u{3bb}(0 2)) 0))");
+		assert_eq!(x.line("\\x \\y \\z x y (z y x (\\x x y) z)").unwrap(), "(\u{3bb}(\u{3bb}(\u{3bb}2 1 (0 1 2 (\u{3bb}0 2) 0))))");
 	}
 }
